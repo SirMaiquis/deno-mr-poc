@@ -1,0 +1,11 @@
+{
+  "apps": {
+    "E0A475X0T3R": {
+      "app_id": "A0A7AUD6WKG",
+      "enterprise_id": "E0A475X0T3R",
+      "team_domain": "mr-auto-poc",
+      "team_id": "E0A475X0T3R"
+    }
+  },
+  "default": "mr-auto-poc"
+}
