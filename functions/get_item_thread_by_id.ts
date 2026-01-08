@@ -62,20 +62,14 @@ export default SlackFunction(
           error: `Failed to get item: ${JSON.stringify(getItemResponse)}`,
         };
       }
-      const threadFirstPart = getItemResponse.record.updated_timestamp;
-      console.log("threadFirstPart", threadFirstPart);
+      const threadFirstPart = String(getItemResponse.record.updated_timestamp);
 
       const conversationId = list_id.replace(/^./, 'C');
-      console.log("conversationId", conversationId);
-      console.log("conversationRequest", {
-        channel: conversationId,
-        limit: 100,
-      });
+      
       const conversationResponse = await client.apiCall("conversations.history", {
         channel: conversationId,
         limit: 100,
       });
-      console.log("conversationResponse", JSON.stringify(conversationResponse));
 
       if (!conversationResponse.ok) {
         return {
@@ -83,8 +77,23 @@ export default SlackFunction(
         };
       }
 
-      const threadId = conversationResponse.messages.find((message: any) => message.ts?.startsWith(threadFirstPart))?.ts;
-      console.log(threadId);
+      // Strategy 1: Find message whose timestamp starts with the item's updated_timestamp
+      let threadId = conversationResponse.messages.find((message: any) => 
+        message.ts?.startsWith(threadFirstPart)
+      )?.ts;
+      
+      // Strategy 2: If not found, look for message with matching list_record_id
+      if (!threadId) {
+        threadId = conversationResponse.messages.find((message: any) => 
+          message.slack_list?.list_record_id === item_id
+        )?.ts;
+      }
+
+      if (!threadId) {
+        return {
+          error: `Could not find thread for item ${item_id}. Tried timestamp: ${threadFirstPart} and list_record_id search.`,
+        };
+      }
 
       return {
         outputs: {
