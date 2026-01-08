@@ -2,18 +2,21 @@ import { Manifest } from "deno-slack-sdk/mod.ts";
 import { MRListAddWorkflow } from "./workflows/mr_list_add.ts";
 import { MRListUpdateStatusWorkflow } from "./workflows/mr_list_update_status_workflow.ts";
 import { MRListItemPostReminderWorkflow } from "./workflows/mr_list_item_post_reminder_workflow.ts";
+import { MRListAddApprovalWorkflow } from "./workflows/mr_list_add_approval_workflow.ts";
+import { MRListBulkPostRemindersWorkflow } from "./workflows/mr_list_bulk_post_reminders_workflow.ts";
 
-/**
- * The app manifest contains the app's configuration. This
- * file defines attributes like app name and description.
- * https://api.slack.com/automation/manifest
- */
 export default Manifest({
   name: "deno-poc-mr-list",
   description:
     "A POC for adding MR list items to a Slack list",
   icon: "assets/default_new_app_icon.png",
-  workflows: [MRListAddWorkflow, MRListUpdateStatusWorkflow, MRListItemPostReminderWorkflow],
+  workflows: [
+    MRListAddWorkflow,
+    MRListUpdateStatusWorkflow,
+    MRListItemPostReminderWorkflow,
+    MRListAddApprovalWorkflow,
+    MRListBulkPostRemindersWorkflow,
+  ],
   outgoingDomains: [],
   botScopes: [
     "commands",
