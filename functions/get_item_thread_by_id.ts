@@ -1,4 +1,5 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
+import { DEFAULT_RESPONSE } from "../constants/default_response.ts";
 
 /**
  * Function to check if an item exists in a Slack list
@@ -43,17 +44,13 @@ export const GetItemThreadByIdFunction = DefineFunction({
 export default SlackFunction(
   GetItemThreadByIdFunction,
   async ({ inputs, client }) => {
-    const { list_id, item_id, conditional } = inputs;
+    const { list_id, item_id } = inputs;
+    let { conditional } = inputs;
+    if (conditional === undefined) conditional = true;
 
     try {
 
-      if (!conditional) {
-        return {
-          outputs: {
-            thread_id: "",
-          },
-        };
-      }
+      if (!conditional) return DEFAULT_RESPONSE;
 
       const getItemResponse = await client.apiCall("slackLists.items.info", {
         list_id: list_id,
@@ -66,12 +63,19 @@ export default SlackFunction(
         };
       }
       const threadFirstPart = getItemResponse.record.updated_timestamp;
+      console.log("threadFirstPart", threadFirstPart);
 
       const conversationId = list_id.replace(/^./, 'C');
+      console.log("conversationId", conversationId);
+      console.log("conversationRequest", {
+        channel: conversationId,
+        limit: 100,
+      });
       const conversationResponse = await client.apiCall("conversations.history", {
         channel: conversationId,
         limit: 100,
       });
+      console.log("conversationResponse", JSON.stringify(conversationResponse));
 
       if (!conversationResponse.ok) {
         return {
@@ -80,6 +84,7 @@ export default SlackFunction(
       }
 
       const threadId = conversationResponse.messages.find((message: any) => message.ts?.startsWith(threadFirstPart))?.ts;
+      console.log(threadId);
 
       return {
         outputs: {

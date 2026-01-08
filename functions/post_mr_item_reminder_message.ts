@@ -45,6 +45,7 @@ export default SlackFunction(
   async ({ inputs, client }) => {
     const { list_id, item_id, thread_id } = inputs;
     let { conditional } = inputs;
+    console.log("posting reminder message to thread", thread_id, "for item", item_id, "on list", list_id, "with conditional", conditional);
 
     try {
 

@@ -6,20 +6,20 @@ import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 export const CheckConditionalFunction = DefineFunction({
   callback_id: "check_conditional",
   title: "Check Conditional",
-  description: "Checks a conditional",
+  description: "Checks a conditional expression",
   source_file: "functions/check_conditional.ts",
   input_parameters: {
     properties: {
       left: {
-        type: Schema.types.string,
+        type: Schema.types.boolean,
         description: "The left side of the conditional",
       },
       operator: {
         type: Schema.types.string,
-        description: "The operator of the conditional",
+        description: "The operator of the conditional (==, !=, >, >=, <, <=)",
       },
       right: {
-        type: Schema.types.string,
+        type: Schema.types.boolean,
         description: "The right side of the conditional",
       },
     },
@@ -28,8 +28,8 @@ export const CheckConditionalFunction = DefineFunction({
   output_parameters: {
     properties: {
       result: {
-        type: Schema.types.string,
-        description: "The result of the conditional",
+        type: Schema.types.boolean,
+        description: "The result of the conditional evaluation",
       },
     },
     required: ["result"],
@@ -37,7 +37,7 @@ export const CheckConditionalFunction = DefineFunction({
 });
 
 /**
- * Handler function that gets a thread by item ID
+ * Handler function that evaluates a conditional expression
  */
 export default SlackFunction(
   CheckConditionalFunction,
@@ -45,8 +45,25 @@ export default SlackFunction(
     const { left, operator, right } = inputs;
 
     try {
-      const result = eval(`${left} ${operator} ${right}`);
-      console.log("result", result);
+      let result: boolean;
+
+      // Safely evaluate the conditional without using eval()
+      switch (operator) {
+        case "==":
+        case "===":
+          result = left === right;
+          break;
+        case "!=":
+        case "!==":
+          result = left !== right;
+          break;
+        default:
+          return {
+            error: `Unsupported operator: ${operator}. Supported operators: ==, !=`,
+          };
+      }
+
+      console.log("Conditional result:", left, operator, right, "=>", result);
 
       return {
         outputs: {
