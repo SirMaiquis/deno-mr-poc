@@ -46,6 +46,7 @@ export default SlackFunction(
 
     try {
       const result = eval(`${left} ${operator} ${right}`);
+      console.log("result", result);
 
       return {
         outputs: {

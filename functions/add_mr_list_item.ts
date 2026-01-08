@@ -1,5 +1,6 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
-import { COLUMN_IDS, STATUS_VALUES } from "../constants/column_ids.ts";
+import { COLUMN_NAMES, STATUS_VALUES } from "../constants/column_ids.ts";
+import { DEFAULT_RESPONSE } from "../constants/default_response.ts";
 
 /**
  * Function to check if an item exists in a Slack list
@@ -71,14 +72,7 @@ export default SlackFunction(
     const { list_id, name, ticket_link, mr_link, assignee, reviewers, team_id, conditional } = inputs;
 
     try {
-      if (!conditional) {
-        return {
-          outputs: {
-            success: false,
-            item_id: "",
-          },
-        };
-      }
+      if (!conditional) return DEFAULT_RESPONSE;
       const getUserListResponse = await client.apiCall("users.list", {
         limit: 1000,
         team_id: team_id,
@@ -91,22 +85,58 @@ export default SlackFunction(
       }
 
       const users = getUserListResponse.members || [];
-      console.log("users", users);
       const assigneeUser = users.find((user: any) => user?.profile?.email === assignee);
-      console.log("assigneeUser", assigneeUser);
       const reviewersUsers = reviewers.split(",").map((email: string) => users.find((user: any) => user?.profile?.email === email));
       const ticketLastPart = ticket_link.split("/").pop();
       const ticketLastPartWithoutQuery = ticketLastPart?.split("?")[0];
-      console.log("ticketLastPartWithoutQuery", ticketLastPartWithoutQuery);
       const mrLastPart = mr_link.split("/").pop();
       const mrLastPartWithoutQuery = mrLastPart?.split("?")[0];
-      console.log("mrLastPartWithoutQuery", mrLastPartWithoutQuery);
+
+      const itemListResponse = await client.apiCall("slackLists.items.list", {
+        list_id: list_id,
+        limit: 1,
+      });
+      if (!itemListResponse.ok) {
+        return {
+          error: `Failed to fetch item list: ${JSON.stringify(itemListResponse)}`,
+        };
+      }
+
+      const getItemResponse = await client.apiCall("slackLists.items.info", {
+        list_id: list_id,
+        id: itemListResponse.items[0].id,
+      });
+
+      if (!getItemResponse.ok) {
+        return {
+          error: `Failed to get item: ${JSON.stringify(getItemResponse)}`,
+        };
+      }
+
+      const nameColumn = getItemResponse.list.list_metadata.schema.find(
+        (column: any) => column.name === COLUMN_NAMES.NAME
+      );
+      const ticketColumn = getItemResponse.list.list_metadata.schema.find(
+        (column: any) => column.name === COLUMN_NAMES.TICKET
+      );
+      const mrColumn = getItemResponse.list.list_metadata.schema.find(
+        (column: any) => column.name === COLUMN_NAMES.MR
+      );
+      const assigneeColumn = getItemResponse.list.list_metadata.schema.find(
+        (column: any) => column.name === COLUMN_NAMES.ASSIGNEE
+      );
+      const reviewersColumn = getItemResponse.list.list_metadata.schema.find(
+        (column: any) => column.name === COLUMN_NAMES.REVIEWERS
+      );
+      const statusColumn = getItemResponse.list.list_metadata.schema.find(
+        (column: any) => column.name === COLUMN_NAMES.STATUS
+      );
 
       var apiParams = {
         "list_id": list_id,
         "initial_fields": [
           {
-            "column_id": COLUMN_IDS.NAME,
+            "column_id": nameColumn.id,
             "rich_text": [
               {
                 "type": "rich_text",
@@ -125,7 +155,7 @@ export default SlackFunction(
             ]
           },
           {
-              "column_id": COLUMN_IDS.TICKET,
+              "column_id": ticketColumn.id,
               "link": [
                   {
                   "original_url": ticket_link,
@@ -135,7 +165,7 @@ export default SlackFunction(
               ]
           },
           {
-              "column_id": COLUMN_IDS.MR,
+              "column_id": mrColumn.id,
               "link": [
                   {
                   "original_url": mr_link,
@@ -148,17 +178,17 @@ export default SlackFunction(
               "user": [
                   assigneeUser?.id
               ],
-              "column_id": COLUMN_IDS.ASSIGNEE
+              "column_id": assigneeColumn.id
           },
           {
               "user": reviewersUsers.map((user: any) => user?.id),
-              "column_id": COLUMN_IDS.REVIEWERS
+              "column_id": reviewersColumn.id
           },
           {
             "select": [
-                STATUS_VALUES.READY_FOR_REVIEW
+                statusColumn.options.choices.find((option: any) => option.label === STATUS_VALUES.READY_FOR_REVIEW)?.value
             ],
-            "column_id": COLUMN_IDS.STATUS
+            "column_id": statusColumn.id
           }
         ]
       };

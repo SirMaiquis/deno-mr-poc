@@ -1,4 +1,5 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
+import { DEFAULT_RESPONSE } from "../constants/default_response.ts";
 
 /**
  * Function to check if an item exists in a Slack list
@@ -32,7 +33,7 @@ export const PostMRItemReminderMessageFunction = DefineFunction({
         default: true,
       }
     },
-    required: ["list_id", "item_id", "thread_id", "conditional"],
+    required: ["list_id", "item_id", "thread_id"],
   },
 });
 
@@ -42,17 +43,13 @@ export const PostMRItemReminderMessageFunction = DefineFunction({
 export default SlackFunction(
   PostMRItemReminderMessageFunction,
   async ({ inputs, client }) => {
-    const { list_id, item_id, thread_id, conditional } = inputs;
+    const { list_id, item_id, thread_id } = inputs;
+    let { conditional } = inputs;
 
     try {
 
-      if (!conditional) {
-        return {
-          outputs: {
-            success: false,
-          },
-        };
-      }
+      if (conditional === undefined) conditional = true;
+      if (!conditional) return DEFAULT_RESPONSE;
 
       const getItemResponse = await client.apiCall("slackLists.items.info", {
         list_id: list_id,
