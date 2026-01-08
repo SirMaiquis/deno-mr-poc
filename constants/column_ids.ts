@@ -1,6 +1,3 @@
-/**
- * Column IDs for Slack List
- */
 export const COLUMN_NAMES = {
   NAME: "Name",
   STATUS: "Status",
@@ -8,11 +5,9 @@ export const COLUMN_NAMES = {
   MR: "MR",
   ASSIGNEE: "Assignee",
   REVIEWERS: "Reviewers",
+  APPROVALS: "Approvals",
 } as const;
 
-/**
- * Status Values for Slack List
- */
 export const STATUS_VALUES = {
   TO_DO: "TO DO",
   IN_DEV: "IN DEV",

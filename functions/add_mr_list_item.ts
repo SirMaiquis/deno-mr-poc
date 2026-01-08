@@ -1,10 +1,11 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import { COLUMN_NAMES, STATUS_VALUES } from "../constants/column_ids.ts";
-import { DEFAULT_RESPONSE } from "../constants/default_response.ts";
+import { handleConditional } from "../shared/conditional_utils.ts";
+import { getUsersByEmails } from "../shared/user_utils.ts";
+import { extractDisplayName } from "../shared/url_utils.ts";
+import { getListSchema, getColumnByName } from "../shared/list_utils.ts";
+import { buildRichTextField, buildLinkField, buildUserField, buildSelectField } from "../shared/list_field_builders.ts";
 
-/**
- * Function to check if an item exists in a Slack list
- */
 export const AddMRListItemFunction = DefineFunction({
   callback_id: "add_mr_list_item",
   title: "Add MR List Item",
@@ -14,11 +15,11 @@ export const AddMRListItemFunction = DefineFunction({
     properties: {
       list_id: {
         type: Schema.types.string,
-        description: "The ID of the Slack list to add the item to (e.g., F0A55R03DU3)",
+        description: "The ID of the Slack list",
       },
       name: {
         type: Schema.types.string,
-        description: "The name of the item to add to the list",
+        description: "The name of the item",
       },
       ticket_link: {
         type: Schema.types.string,
@@ -30,11 +31,11 @@ export const AddMRListItemFunction = DefineFunction({
       },
       assignee: {
         type: Schema.types.string,
-        description: "The assignee of the item",
+        description: "The assignee email",
       },
       reviewers: {
         type: Schema.types.string,
-        description: "The reviewers of the item",
+        description: "Comma-separated reviewer emails",
       },
       team_id: {
         type: Schema.types.string,
@@ -42,9 +43,9 @@ export const AddMRListItemFunction = DefineFunction({
       },
       conditional: {
         type: Schema.types.boolean,
-        description: "Determines if the function should be executed or not",
+        description: "Whether to execute this function",
         default: true,
-      }
+      },
     },
     required: ["list_id", "name", "ticket_link", "mr_link", "assignee", "team_id"],
   },
@@ -52,170 +53,101 @@ export const AddMRListItemFunction = DefineFunction({
     properties: {
       success: {
         type: Schema.types.boolean,
-        description: "Whether the item was added to the list",
+        description: "Whether the item was added",
       },
       item_id: {
         type: Schema.types.string,
-        description: "The ID of the item that was added to the list",
+        description: "The ID of the added item",
       },
     },
     required: ["success", "item_id"],
   },
 });
 
-/**
- * Handler function that checks if an item exists in a list
- */
+const buildItemFields = (
+  schema: any[],
+  data: {
+    name: string;
+    ticketLink: string;
+    mrLink: string;
+    assigneeId: string;
+    reviewerIds: string[];
+    statusValue: string;
+  }
+) => {
+  const nameColumn = getColumnByName(schema, COLUMN_NAMES.NAME);
+  const ticketColumn = getColumnByName(schema, COLUMN_NAMES.TICKET);
+  const mrColumn = getColumnByName(schema, COLUMN_NAMES.MR);
+  const assigneeColumn = getColumnByName(schema, COLUMN_NAMES.ASSIGNEE);
+  const reviewersColumn = getColumnByName(schema, COLUMN_NAMES.REVIEWERS);
+  const statusColumn = getColumnByName(schema, COLUMN_NAMES.STATUS);
+
+  return [
+    buildRichTextField(nameColumn.id, data.name),
+    buildLinkField(ticketColumn.id, data.ticketLink, extractDisplayName(data.ticketLink)),
+    buildLinkField(mrColumn.id, data.mrLink, extractDisplayName(data.mrLink)),
+    buildUserField(assigneeColumn.id, [data.assigneeId]),
+    buildUserField(reviewersColumn.id, data.reviewerIds),
+    buildSelectField(statusColumn.id, data.statusValue),
+  ];
+};
+
 export default SlackFunction(
   AddMRListItemFunction,
   async ({ inputs, client }) => {
     const { list_id, name, ticket_link, mr_link, assignee, reviewers, team_id, conditional } = inputs;
 
     try {
-      if (!conditional) return DEFAULT_RESPONSE;
-      const getUserListResponse = await client.apiCall("users.list", {
-        limit: 1000,
-        team_id: team_id,
-      });
+      const conditionalCheck = handleConditional(conditional);
+      if (conditionalCheck.skip) return conditionalCheck.response;
 
-      if (!getUserListResponse.ok) {
-        return {
-          error: `Failed to fetch user list: ${JSON.stringify(getUserListResponse)}`,
-        };
-      }
+      const reviewerEmails = reviewers.split(",").map((email) => email.trim());
+      const allEmails = [assignee, ...reviewerEmails];
+      const users = await getUsersByEmails(client, allEmails, team_id);
 
-      const users = getUserListResponse.members || [];
       const assigneeUser = users.find((user: any) => user?.profile?.email === assignee);
-      const reviewersUsers = reviewers.split(",").map((email: string) => users.find((user: any) => user?.profile?.email === email));
-      const ticketLastPart = ticket_link.split("/").pop();
-      const ticketLastPartWithoutQuery = ticketLastPart?.split("?")[0];
-      const mrLastPart = mr_link.split("/").pop();
-      const mrLastPartWithoutQuery = mrLastPart?.split("?")[0];
+      const reviewerUsers = reviewerEmails.map((email) =>
+        users.find((user: any) => user?.profile?.email === email)
+      ).filter(Boolean);
 
-      const itemListResponse = await client.apiCall("slackLists.items.list", {
-        list_id: list_id,
-        limit: 1,
-      });
-      if (!itemListResponse.ok) {
-        return {
-          error: `Failed to fetch item list: ${JSON.stringify(itemListResponse)}`,
-        };
+      if (!assigneeUser) {
+        throw new Error(`Assignee not found: ${assignee}`);
       }
 
-      const getItemResponse = await client.apiCall("slackLists.items.info", {
-        list_id: list_id,
-        id: itemListResponse.items[0].id,
+      const schema = await getListSchema(client, list_id);
+      const statusColumn = getColumnByName(schema, COLUMN_NAMES.STATUS);
+      const statusValue = statusColumn.options.choices.find(
+        (option: any) => option.label === STATUS_VALUES.READY_FOR_REVIEW
+      )?.value;
+
+      const fields = buildItemFields(schema, {
+        name,
+        ticketLink: ticket_link,
+        mrLink: mr_link,
+        assigneeId: assigneeUser.id,
+        reviewerIds: reviewerUsers.map((user: any) => user.id),
+        statusValue,
       });
 
-      if (!getItemResponse.ok) {
-        return {
-          error: `Failed to get item: ${JSON.stringify(getItemResponse)}`,
-        };
-      }
-
-      const nameColumn = getItemResponse.list.list_metadata.schema.find(
-        (column: any) => column.name === COLUMN_NAMES.NAME
-      );
-      const ticketColumn = getItemResponse.list.list_metadata.schema.find(
-        (column: any) => column.name === COLUMN_NAMES.TICKET
-      );
-      const mrColumn = getItemResponse.list.list_metadata.schema.find(
-        (column: any) => column.name === COLUMN_NAMES.MR
-      );
-      const assigneeColumn = getItemResponse.list.list_metadata.schema.find(
-        (column: any) => column.name === COLUMN_NAMES.ASSIGNEE
-      );
-      const reviewersColumn = getItemResponse.list.list_metadata.schema.find(
-        (column: any) => column.name === COLUMN_NAMES.REVIEWERS
-      );
-      const statusColumn = getItemResponse.list.list_metadata.schema.find(
-        (column: any) => column.name === COLUMN_NAMES.STATUS
-      );
-
-      var apiParams = {
-        "list_id": list_id,
-        "initial_fields": [
-          {
-            "column_id": nameColumn.id,
-            "rich_text": [
-              {
-                "type": "rich_text",
-                "elements": [
-                  {
-                    "type": "rich_text_section",
-                    "elements": [
-                      {
-                        "type": "text",
-                        "text": name
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          },
-          {
-              "column_id": ticketColumn.id,
-              "link": [
-                  {
-                  "original_url": ticket_link,
-                  "display_as_url": false,
-                  "display_name": ticketLastPartWithoutQuery
-                  }
-              ]
-          },
-          {
-              "column_id": mrColumn.id,
-              "link": [
-                  {
-                  "original_url": mr_link,
-                  "display_as_url": false,
-                  "display_name": mrLastPartWithoutQuery
-                  }
-              ]
-          },
-          {
-              "user": [
-                  assigneeUser?.id
-              ],
-              "column_id": assigneeColumn.id
-          },
-          {
-              "user": reviewersUsers.map((user: any) => user?.id),
-              "column_id": reviewersColumn.id
-          },
-          {
-            "select": [
-                statusColumn.options.choices.find((option: any) => option.label === STATUS_VALUES.READY_FOR_REVIEW)?.value
-            ],
-            "column_id": statusColumn.id
-          }
-        ]
-      };
-
-      console.log("apiParams", apiParams);
-
-      const addItemResponse = await client.apiCall("slackLists.items.create", {
-        ...apiParams,
+      const response = await client.apiCall("slackLists.items.create", {
+        list_id,
+        initial_fields: fields,
       });
-      console.log("addItemResponse", addItemResponse);
-      if (!addItemResponse.ok) {
-        return {
-          error: `Failed to add item to list: ${JSON.stringify(addItemResponse)}, ${JSON.stringify(apiParams)}`,
-        };
+
+      if (!response.ok) {
+        throw new Error(`Failed to add item: ${JSON.stringify(response)}`);
       }
 
       return {
         outputs: {
           success: true,
-          item_id: addItemResponse.item.id,
+          item_id: response.item.id,
         },
       };
     } catch (error) {
-      return {
-        error: `Error adding item to list: ${JSON.stringify(error)}`,
-      };
+      return { error: `Error adding item: ${error.message}` };
     }
-  },
+  }
 );
+
 

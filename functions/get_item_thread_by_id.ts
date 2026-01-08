@@ -1,9 +1,8 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
-import { DEFAULT_RESPONSE } from "../constants/default_response.ts";
+import { handleConditional } from "../shared/conditional_utils.ts";
+import { getThreadId } from "../shared/message_utils.ts";
+import { getItemInfo } from "../shared/list_utils.ts";
 
-/**
- * Function to check if an item exists in a Slack list
- */
 export const GetItemThreadByIdFunction = DefineFunction({
   callback_id: "get_item_thread_by_id",
   title: "Get Item Thread By ID",
@@ -13,17 +12,17 @@ export const GetItemThreadByIdFunction = DefineFunction({
     properties: {
       list_id: {
         type: Schema.types.string,
-        description: "The ID of the Slack list to get the thread for",
+        description: "The ID of the Slack list",
       },
       item_id: {
         type: Schema.types.string,
-        description: "The ID of the item to get the thread for",
+        description: "The ID of the item",
       },
       conditional: {
         type: Schema.types.boolean,
-        description: "Determines if the function should be executed or not",
+        description: "Whether to execute this function",
         default: true,
-      }
+      },
     },
     required: ["list_id", "item_id"],
   },
@@ -38,72 +37,22 @@ export const GetItemThreadByIdFunction = DefineFunction({
   },
 });
 
-/**
- * Handler function that gets a thread by item ID
- */
 export default SlackFunction(
   GetItemThreadByIdFunction,
   async ({ inputs, client }) => {
-    const { list_id, item_id } = inputs;
-    let { conditional } = inputs;
-    if (conditional === undefined) conditional = true;
+    const { list_id, item_id, conditional } = inputs;
 
     try {
+      const conditionalCheck = handleConditional(conditional);
+      if (conditionalCheck.skip) return conditionalCheck.response;
 
-      if (!conditional) return DEFAULT_RESPONSE;
+      const itemInfo = await getItemInfo(client, list_id, item_id);
+      const itemTimestamp = String(itemInfo.record.updated_timestamp);
+      const threadId = await getThreadId(client, list_id, item_id, itemTimestamp);
 
-      const getItemResponse = await client.apiCall("slackLists.items.info", {
-        list_id: list_id,
-        id: item_id,
-      });
-
-      if (!getItemResponse.ok) {
-        return {
-          error: `Failed to get item: ${JSON.stringify(getItemResponse)}`,
-        };
-      }
-      const threadFirstPart = String(getItemResponse.record.updated_timestamp);
-
-      const conversationId = list_id.replace(/^./, 'C');
-      
-      const conversationResponse = await client.apiCall("conversations.history", {
-        channel: conversationId,
-        limit: 100,
-      });
-
-      if (!conversationResponse.ok) {
-        return {
-          error: `Failed to get conversation: ${JSON.stringify(conversationResponse)}`,
-        };
-      }
-
-      // Strategy 1: Find message whose timestamp starts with the item's updated_timestamp
-      let threadId = conversationResponse.messages.find((message: any) => 
-        message.ts?.startsWith(threadFirstPart)
-      )?.ts;
-      
-      // Strategy 2: If not found, look for message with matching list_record_id
-      if (!threadId) {
-        threadId = conversationResponse.messages.find((message: any) => 
-          message.slack_list?.list_record_id === item_id
-        )?.ts;
-      }
-
-      if (!threadId) {
-        return {
-          error: `Could not find thread for item ${item_id}. Tried timestamp: ${threadFirstPart} and list_record_id search.`,
-        };
-      }
-
-      return {
-        outputs: {
-          thread_id: threadId,
-        },
-      };
+      return { outputs: { thread_id: threadId } };
     } catch (error) {
-      return {
-        error: `Error getting thread: ${error.message}`,
-      };
+      return { error: `Error getting thread: ${error.message}` };
     }
-  },
+  }
 );
