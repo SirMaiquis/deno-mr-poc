@@ -5,6 +5,7 @@ import { MRListUpdateStatusWorkflow } from "../workflows/mr_list_update_status_w
 /**
  * Trigger for updating MR list item status
  * This is a webhook trigger that can be invoked from external systems
+ * Can use either item_id or item_name to identify the item
  */
 const mrListUpdateStatusTrigger: Trigger<typeof MRListUpdateStatusWorkflow.definition> = {
   type: TriggerTypes.Webhook,
@@ -17,6 +18,9 @@ const mrListUpdateStatusTrigger: Trigger<typeof MRListUpdateStatusWorkflow.defin
     },
     item_id: {
       value: "{{data.item_id}}",
+    },
+    item_name: {
+      value: "{{data.item_name}}",
     },
     status_key: {
       value: "{{data.status_key}}",

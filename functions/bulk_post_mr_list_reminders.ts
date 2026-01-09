@@ -42,7 +42,10 @@ export const BulkPostMRListRemindersFunction = DefineFunction({
   },
 });
 
-const getPendingReviewers = (itemInfo: any) => {
+/**
+ * Gets all reviewers who haven't approved yet for a given item
+ */
+const getPendingReviewers = (itemInfo: any): string[] => {
   const schema = itemInfo.list.list_metadata.schema;
   const reviewersColumn = getColumnByName(schema, COLUMN_NAMES.REVIEWERS);
   const approvalsColumn = getColumnByName(schema, COLUMN_NAMES.APPROVALS);
@@ -56,8 +59,102 @@ const getPendingReviewers = (itemInfo: any) => {
   return reviewers.filter((reviewer: string) => !approvals.includes(reviewer));
 };
 
+/**
+ * Formats user IDs into Slack mention format
+ */
 const formatMentions = (userIds: string[]): string => {
   return userIds.map((id) => `<@${id}>`).join(" ");
+};
+
+/**
+ * Fetches all items from a Slack list
+ */
+const getAllListItems = async (
+  client: any,
+  listId: string,
+  teamId?: string
+): Promise<any[]> => {
+  const apiParams: any = { list_id: listId, limit: 1000 };
+  if (teamId) apiParams.team_id = teamId;
+
+  const listResponse = await client.apiCall("slackLists.items.list", apiParams);
+
+  if (!listResponse.ok) {
+    throw new Error(`Failed to fetch list items: ${listResponse.error}`);
+  }
+
+  return listResponse.items || [];
+};
+
+/**
+ * Posts a reminder message to a thread for a specific item
+ */
+const postReminderMessage = async (
+  client: any,
+  listId: string,
+  itemId: string,
+  threadId: string,
+  pendingReviewers: string[]
+): Promise<boolean> => {
+  const mentions = formatMentions(pendingReviewers);
+  const channelId = listIdToChannelId(listId);
+  const messageText = `This item is ready to review, please review it. cc: ${mentions}`;
+
+  const response = await client.apiCall("chat.postMessage", {
+    channel: channelId,
+    thread_ts: threadId,
+    markdown_text: messageText,
+  });
+
+  return response.ok;
+};
+
+/**
+ * Processes a single item and posts a reminder if it has pending reviewers
+ * Returns true if reminder was sent successfully, false otherwise
+ */
+const processItemReminder = async (
+  client: any,
+  listId: string,
+  item: any
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    // Get full item info to check for pending reviewers
+    const itemInfo = await getItemInfo(client, listId, item.id);
+    const pendingReviewers = getPendingReviewers(itemInfo);
+
+    // Skip if no pending reviewers
+    if (pendingReviewers.length === 0) {
+      return { success: false };
+    }
+
+    // Get thread ID for the item
+    const itemTimestamp = String(itemInfo.record.updated_timestamp);
+    const threadId = await getThreadId(client, listId, item.id, itemTimestamp);
+
+    // Post reminder message
+    const success = await postReminderMessage(
+      client,
+      listId,
+      item.id,
+      threadId,
+      pendingReviewers
+    );
+
+    if (!success) {
+      return {
+        success: false,
+        error: `Failed to post reminder for item ${item.id}`,
+      };
+    }
+
+    return { success: true };
+  } catch (error) {
+    return {
+      success: false,
+      error: `Error processing item ${item.id}: ${error.message}`,
+    };
+  }
 };
 
 export default SlackFunction(
@@ -70,53 +167,23 @@ export default SlackFunction(
       if (conditionalCheck.skip) return conditionalCheck.response;
 
       // Get all list items
-      const apiParams: any = { list_id, limit: 1000 };
-      if (team_id) apiParams.team_id = team_id;
+      const items = await getAllListItems(client, list_id, team_id);
 
-      const listResponse = await client.apiCall("slackLists.items.list", apiParams);
-
-      if (!listResponse.ok) {
-        throw new Error(`Failed to fetch list items: ${listResponse.error}`);
-      }
-
-      const items = listResponse.items || [];
+      // Process each item and collect results
       let remindersSent = 0;
       const errors: string[] = [];
 
-      // Process each item
       for (const item of items) {
-        try {
-          // Get full item info to check for pending reviewers
-          const itemInfo = await getItemInfo(client, list_id, item.id);
-          const pendingReviewers = getPendingReviewers(itemInfo);
+        const result = await processItemReminder(client, list_id, item);
 
-          // Only post reminder if there are pending reviewers
-          if (pendingReviewers.length > 0) {
-            // Get thread ID
-            const itemTimestamp = String(itemInfo.record.updated_timestamp);
-            const threadId = await getThreadId(client, list_id, item.id, itemTimestamp);
-
-            // Post reminder message
-            const mentions = formatMentions(pendingReviewers);
-            const channelId = listIdToChannelId(list_id);
-            
-            const response = await client.apiCall("chat.postMessage", {
-              channel: channelId,
-              thread_ts: threadId,
-              markdown_text: `This item is ready to review, please review it. cc: ${mentions}`,
-            });
-
-            if (response.ok) {
-              remindersSent++;
-            } else {
-              errors.push(`Failed to post reminder for item ${item.id}: ${response.error}`);
-            }
-          }
-        } catch (error) {
-          errors.push(`Error processing item ${item.id}: ${error.message}`);
+        if (result.success) {
+          remindersSent++;
+        } else if (result.error) {
+          errors.push(result.error);
         }
       }
 
+      // Log warnings if any errors occurred
       if (errors.length > 0) {
         console.warn("Some reminders failed:", errors);
       }

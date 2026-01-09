@@ -18,7 +18,11 @@ export const MRListUpdateStatusWorkflow = DefineWorkflow({
       },
       item_id: {
         type: Schema.types.string,
-        description: "The ID of the item to update",
+        description: "The ID of the item to update (optional if item_name is provided)",
+      },
+      item_name: {
+        type: Schema.types.string,
+        description: "The name of the item to update (optional if item_id is provided)",
       },
       status_key: {
         type: Schema.types.string,
@@ -29,36 +33,37 @@ export const MRListUpdateStatusWorkflow = DefineWorkflow({
         description: "The team/workspace ID",
       },
     },
-    required: ["list_id", "item_id", "status_key", "team_id"],
+    required: ["list_id", "status_key"],
   },
 });
 
-// Step 1: Update the item status
+// Step 1: Update the item status (resolves item_id if item_name was provided)
 const updateStatusStep = MRListUpdateStatusWorkflow.addStep(
   UpdateMRItemStatusFunction,
   {
     list_id: MRListUpdateStatusWorkflow.inputs.list_id,
     item_id: MRListUpdateStatusWorkflow.inputs.item_id,
+    item_name: MRListUpdateStatusWorkflow.inputs.item_name,
     status_key: MRListUpdateStatusWorkflow.inputs.status_key,
     team_id: MRListUpdateStatusWorkflow.inputs.team_id,
   }
 );
 
-// Step 2: Get the thread ID for the item
+// Step 2: Get the thread ID for the item (use resolved item_id from step 1)
 const getThreadStep = MRListUpdateStatusWorkflow.addStep(
   GetItemThreadByIdFunction,
   {
     list_id: MRListUpdateStatusWorkflow.inputs.list_id,
-    item_id: MRListUpdateStatusWorkflow.inputs.item_id,
+    item_id: updateStatusStep.outputs.item_id,
   }
 );
 
-// Step 3: Post a reminder message to the thread
+// Step 3: Post a reminder message to the thread (use resolved item_id from step 1)
 MRListUpdateStatusWorkflow.addStep(
   PostMRItemReminderMessageFunction,
   {
     list_id: MRListUpdateStatusWorkflow.inputs.list_id,
-    item_id: MRListUpdateStatusWorkflow.inputs.item_id,
+    item_id: updateStatusStep.outputs.item_id,
     thread_id: getThreadStep.outputs.thread_id,
     team_id: MRListUpdateStatusWorkflow.inputs.team_id,
   }
