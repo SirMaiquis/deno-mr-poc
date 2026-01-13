@@ -50,9 +50,11 @@ export default SlackFunction(
   CheckConditionalFunction,
   async ({ inputs }) => {
     const { left, operator, right } = inputs;
+    console.log("CheckConditionalFunction inputs", JSON.stringify({ left, operator, right }));
 
     try {
       const result = evaluateCondition(left, operator, right);
+      console.log("CheckConditionalFunction result", JSON.stringify(result));
       return { outputs: { result } };
     } catch (error) {
       return { error: `Error evaluating condition: ${error.message}` };

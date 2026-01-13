@@ -50,6 +50,11 @@ export default SlackFunction(
   CheckListItemExistsFunction,
   async ({ inputs, client }) => {
     const { list_id, item_name, team_id } = inputs;
+    console.log("CheckListItemExistsFunction inputs", JSON.stringify({
+      list_id,
+      item_name,
+      team_id,
+    }));
 
     try {
       const apiParams: any = { list_id, limit: 1000 };
@@ -62,6 +67,7 @@ export default SlackFunction(
       }
 
       const matchingItem = findItemByName(response.items || [], item_name);
+      console.log("CheckListItemExistsFunction matchingItem", JSON.stringify(matchingItem));
 
       return {
         outputs: {

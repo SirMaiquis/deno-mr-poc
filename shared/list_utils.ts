@@ -3,6 +3,7 @@ export const listIdToChannelId = (listId: string): string => {
 };
 
 export const getListSchema = async (client: any, listId: string) => {
+  console.log("getListSchema listId", listId);
   const itemListResponse = await client.apiCall("slackLists.items.list", {
     list_id: listId,
     limit: 1,

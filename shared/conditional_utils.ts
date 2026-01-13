@@ -5,6 +5,7 @@ export const shouldExecute = (conditional: boolean | undefined): boolean => {
 };
 
 export const handleConditional = (conditional: boolean | undefined) => {
+  console.log("handleConditional conditional", JSON.stringify(conditional));
   if (!shouldExecute(conditional)) {
     return { skip: true, response: DEFAULT_RESPONSE };
   }

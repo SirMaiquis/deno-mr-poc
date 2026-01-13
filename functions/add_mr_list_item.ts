@@ -44,7 +44,6 @@ export const AddMRListItemFunction = DefineFunction({
       conditional: {
         type: Schema.types.boolean,
         description: "Whether to execute this function",
-        default: true,
       },
     },
     required: ["list_id", "name", "ticket_link", "mr_link", "assignee", "team_id"],
@@ -96,23 +95,42 @@ export default SlackFunction(
   AddMRListItemFunction,
   async ({ inputs, client }) => {
     const { list_id, name, ticket_link, mr_link, assignee, reviewers, team_id, conditional } = inputs;
+    console.log("AddMRListItemFunction inputs", JSON.stringify({
+      list_id,
+      name,
+      ticket_link,
+      mr_link,
+      assignee,
+      reviewers,
+      team_id,
+      conditional,
+    }));
 
     try {
       const conditionalCheck = handleConditional(conditional);
+      console.log("AddMRListItemFunction conditionalCheck", JSON.stringify(conditionalCheck));
       if (conditionalCheck.skip) return conditionalCheck.response;
+
+      console.log("AddMRListItemFunction conditionalCheck", JSON.stringify(conditionalCheck));
 
       const reviewerEmails = reviewers.split(",").map((email) => email.trim());
       const allEmails = [assignee, ...reviewerEmails];
-      const users = await getUsersByEmails(client, allEmails, team_id);
+      const usersByEmail = await getUsersByEmails(client, allEmails, team_id);
 
-      const assigneeUser = users.find((user: any) => user?.profile?.email === assignee);
-      const reviewerUsers = reviewerEmails.map((email) =>
-        users.find((user: any) => user?.profile?.email === email)
-      ).filter(Boolean);
+      console.log("AddMRListItemFunction usersByEmail", JSON.stringify(usersByEmail));
 
-      if (!assigneeUser) {
+      const assigneeResponse = usersByEmail[assignee];
+      if (!assigneeResponse || !assigneeResponse.ok || !assigneeResponse.user) {
         throw new Error(`Assignee not found: ${assignee}`);
       }
+      const assigneeUser = assigneeResponse.user;
+
+      const reviewerUsers = reviewerEmails
+        .map((email) => {
+          const response = usersByEmail[email];
+          return response?.ok && response?.user ? response.user : null;
+        })
+        .filter(Boolean);
 
       const schema = await getListSchema(client, list_id);
       const statusColumn = getColumnByName(schema, COLUMN_NAMES.STATUS);
@@ -128,6 +146,12 @@ export default SlackFunction(
         reviewerIds: reviewerUsers.map((user: any) => user.id),
         statusValue,
       });
+      console.log("add_mr_list_item request", JSON.stringify(
+        {
+          list_id,
+          initial_fields: fields,
+        }
+      ));
 
       const response = await client.apiCall("slackLists.items.create", {
         list_id,

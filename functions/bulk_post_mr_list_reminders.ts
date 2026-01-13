@@ -77,8 +77,9 @@ const getAllListItems = async (
   const apiParams: any = { list_id: listId, limit: 1000 };
   if (teamId) apiParams.team_id = teamId;
 
+  console.log("getAllListItems apiParams", JSON.stringify(apiParams));
   const listResponse = await client.apiCall("slackLists.items.list", apiParams);
-
+  console.log("getAllListItems listResponse", JSON.stringify(listResponse));
   if (!listResponse.ok) {
     throw new Error(`Failed to fetch list items: ${listResponse.error}`);
   }
@@ -161,6 +162,7 @@ export default SlackFunction(
   BulkPostMRListRemindersFunction,
   async ({ inputs, client }) => {
     const { list_id, team_id, conditional } = inputs;
+    console.log("BulkPostMRListRemindersFunction inputs", JSON.stringify(inputs));
 
     try {
       const conditionalCheck = handleConditional(conditional);

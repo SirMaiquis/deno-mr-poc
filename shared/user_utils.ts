@@ -2,20 +2,33 @@ export const getUsersByEmails = async (
   client: any,
   emails: string[],
   teamId: string
-) => {
-  const response = await client.apiCall("users.list", {
-    limit: 1000,
-    team_id: teamId,
+): Promise<Record<string, { ok: boolean; user?: any; error?: string }>> => {
+  const lookupPromises = emails.map(async (email) => {
+    try {
+      const response = await client.apiCall("users.lookupByEmail", {
+        email,
+        team_id: teamId,
+      });
+      return { email, response };
+    } catch (error: any) {
+      return { 
+        email, 
+        response: { 
+          ok: false, 
+          error: error?.message || String(error) 
+        } 
+      };
+    }
   });
 
-  if (!response.ok) {
-    throw new Error(`Failed to fetch user list: ${JSON.stringify(response)}`);
+  const results = await Promise.all(lookupPromises);
+  
+  const resultObject: Record<string, { ok: boolean; user?: any; error?: string }> = {};
+  for (const { email, response } of results) {
+    resultObject[email] = response;
   }
-
-  const users = response.members || [];
-  return emails.map((email) =>
-    users.find((user: any) => user?.profile?.email === email)
-  ).filter(Boolean);
+  
+  return resultObject;
 };
 
 export const getUserByEmail = async (
@@ -23,7 +36,13 @@ export const getUserByEmail = async (
   email: string,
   teamId: string
 ) => {
-  const users = await getUsersByEmails(client, [email], teamId);
-  return users[0];
+  const usersByEmail = await getUsersByEmails(client, [email], teamId);
+  const response = usersByEmail[email];
+  
+  if (!response || !response.ok || !response.user) {
+    return null;
+  }
+  
+  return response.user;
 };
 
