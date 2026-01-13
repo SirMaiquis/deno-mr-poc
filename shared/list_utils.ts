@@ -1,3 +1,5 @@
+import { COLUMN_NAMES } from "../constants/column_ids.ts";
+
 export const listIdToChannelId = (listId: string): string => {
   return listId.replace(/^./, 'C');
 };
@@ -50,3 +52,19 @@ export const getFieldValue = (item: any, columnId: string) => {
   return item.record.fields.find((field: any) => field.column_id === columnId);
 };
 
+/**
+ * Gets all reviewers who haven't approved yet for a given item
+ */
+export const getPendingReviewers = (itemInfo: any): string[] => {
+  const schema = itemInfo.list.list_metadata.schema;
+  const reviewersColumn = getColumnByName(schema, COLUMN_NAMES.REVIEWERS);
+  const approvalsColumn = getColumnByName(schema, COLUMN_NAMES.APPROVALS);
+
+  const reviewersField = getFieldValue(itemInfo, reviewersColumn.id);
+  const approvalsField = getFieldValue(itemInfo, approvalsColumn.id);
+
+  const reviewers = Array.isArray(reviewersField?.user) ? reviewersField.user : [];
+  const approvals = Array.isArray(approvalsField?.user) ? approvalsField.user : [];
+
+  return reviewers.filter((reviewer: string) => !approvals.includes(reviewer));
+};

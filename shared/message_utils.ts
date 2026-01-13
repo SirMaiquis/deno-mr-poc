@@ -44,3 +44,9 @@ export const getThreadId = async (
   return threadId;
 };
 
+/**
+ * Formats user IDs into Slack mention format
+ */
+export const formatMentions = (userIds: string[]): string => {
+  return userIds.map((id) => `<@${id}>`).join(" ");
+};

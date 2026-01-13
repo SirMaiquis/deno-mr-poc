@@ -1,7 +1,14 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import { handleConditional } from "../shared/conditional_utils.ts";
-import { listIdToChannelId, getItemInfo, getColumnByName, getFieldValue } from "../shared/list_utils.ts";
+import {
+  listIdToChannelId,
+  getItemInfo,
+  getColumnByName,
+  getFieldValue,
+  getPendingReviewers,
+} from "../shared/list_utils.ts";
 import { COLUMN_NAMES } from "../constants/column_ids.ts";
+import { getReminderMessage } from "../constants/reminder_messages.ts";
 
 export const PostMRItemReminderMessageFunction = DefineFunction({
   callback_id: "post_mr_item_reminder_message",
@@ -36,22 +43,47 @@ export const PostMRItemReminderMessageFunction = DefineFunction({
   },
 });
 
-const getPendingReviewers = (itemInfo: any) => {
+/**
+ * Extracts the assignee user ID from item info
+ */
+const getAssignee = (itemInfo: any): string | null => {
   const schema = itemInfo.list.list_metadata.schema;
-  const reviewersColumn = getColumnByName(schema, COLUMN_NAMES.REVIEWERS);
-  const approvalsColumn = getColumnByName(schema, COLUMN_NAMES.APPROVALS);
-
-  const reviewersField = getFieldValue(itemInfo, reviewersColumn.id);
-  const approvalsField = getFieldValue(itemInfo, approvalsColumn.id);
-
-  const reviewers = Array.isArray(reviewersField?.user) ? reviewersField.user : [];
-  const approvals = Array.isArray(approvalsField?.user) ? approvalsField.user : [];
-
-  return reviewers.filter((reviewer: string) => !approvals.includes(reviewer));
+  const assigneeColumn = getColumnByName(schema, COLUMN_NAMES.ASSIGNEE);
+  const assigneeField = getFieldValue(itemInfo, assigneeColumn.id);
+  return assigneeField?.user || null;
 };
 
-const formatMentions = (userIds: string[]): string => {
-  return userIds.map((id) => `<@${id}>`).join(" ");
+/**
+ * Extracts the status label from item info
+ */
+const getStatusLabel = (itemInfo: any): string | null => {
+  const schema = itemInfo.list.list_metadata.schema;
+  const statusColumn = getColumnByName(schema, COLUMN_NAMES.STATUS);
+  const statusField = getFieldValue(itemInfo, statusColumn.id);
+  const statusOption = statusColumn.options.choices.find(
+    (option: any) => option.value === statusField?.value
+  );
+  return statusOption?.label || null;
+};
+
+/**
+ * Posts a reminder message to a Slack thread
+ */
+const postReminderToThread = async (
+  client: any,
+  channelId: string,
+  threadId: string,
+  message: string
+): Promise<void> => {
+  const response = await client.apiCall("chat.postMessage", {
+    channel: channelId,
+    thread_ts: threadId,
+    markdown_text: message,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to post message: ${JSON.stringify(response)}`);
+  }
 };
 
 export default SlackFunction(
@@ -65,21 +97,23 @@ export default SlackFunction(
 
       const itemInfo = await getItemInfo(client, list_id, item_id);
       const pendingReviewers = getPendingReviewers(itemInfo);
-      const mentions = formatMentions(pendingReviewers);
+      const assignee = getAssignee(itemInfo);
+      const statusLabel = getStatusLabel(itemInfo);
 
-      const channelId = listIdToChannelId(list_id);
-      const response = await client.apiCall("chat.postMessage", {
-        channel: channelId,
-        thread_ts: thread_id,
-        markdown_text: `This item is ready to review, please review it. cc: ${mentions}`,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to post message: ${JSON.stringify(response)}`);
+      if (!statusLabel) {
+        return { outputs: { success: false, error: "No status label found" } };
       }
 
+      const reminderMessage = getReminderMessage(statusLabel, assignee || "", pendingReviewers);
+      if (!reminderMessage) {
+        return { outputs: { success: true } };
+      }
+
+      const channelId = listIdToChannelId(list_id);
+      await postReminderToThread(client, channelId, thread_id, reminderMessage);
+
       return { outputs: { success: true } };
-    } catch (error) {
+    } catch (error: any) {
       return { error: `Error posting reminder: ${error.message}` };
     }
   }
