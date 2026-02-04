@@ -1,13 +1,20 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import { handleConditional } from "../shared/conditional_utils.ts";
-import { listIdToChannelId, getItemInfo, getColumnByName, getFieldValue } from "../shared/list_utils.ts";
+import {
+  listIdToChannelId,
+  getItemInfo,
+  getColumnByName,
+  getFieldValue,
+  getPendingReviewers,
+} from "../shared/list_utils.ts";
 import { getThreadId } from "../shared/message_utils.ts";
 import { COLUMN_NAMES } from "../constants/column_ids.ts";
+import { getReminderMessage } from "../constants/reminder_messages.ts";
 
 export const BulkPostMRListRemindersFunction = DefineFunction({
   callback_id: "bulk_post_mr_list_reminders",
   title: "Bulk Post MR List Reminders",
-  description: "Gets all list items and posts reminders for items with pending reviewers",
+  description: "Gets all list items and posts reminders using the same logic as single-item reminders (status, assignee, pending reviewers)",
   source_file: "functions/bulk_post_mr_list_reminders.ts",
   input_parameters: {
     properties: {
@@ -43,27 +50,46 @@ export const BulkPostMRListRemindersFunction = DefineFunction({
 });
 
 /**
- * Gets all reviewers who haven't approved yet for a given item
+ * Extracts the assignee user ID from item info (same as post_mr_item_reminder_message)
  */
-const getPendingReviewers = (itemInfo: any): string[] => {
+const getAssignee = (itemInfo: any): string | null => {
   const schema = itemInfo.list.list_metadata.schema;
-  const reviewersColumn = getColumnByName(schema, COLUMN_NAMES.REVIEWERS);
-  const approvalsColumn = getColumnByName(schema, COLUMN_NAMES.APPROVALS);
-
-  const reviewersField = getFieldValue(itemInfo, reviewersColumn.id);
-  const approvalsField = getFieldValue(itemInfo, approvalsColumn.id);
-
-  const reviewers = Array.isArray(reviewersField?.user) ? reviewersField.user : [];
-  const approvals = Array.isArray(approvalsField?.user) ? approvalsField.user : [];
-
-  return reviewers.filter((reviewer: string) => !approvals.includes(reviewer));
+  const assigneeColumn = getColumnByName(schema, COLUMN_NAMES.ASSIGNEE);
+  const assigneeField = getFieldValue(itemInfo, assigneeColumn.id);
+  return assigneeField?.user || null;
 };
 
 /**
- * Formats user IDs into Slack mention format
+ * Extracts the status label from item info (same as post_mr_item_reminder_message)
  */
-const formatMentions = (userIds: string[]): string => {
-  return userIds.map((id) => `<@${id}>`).join(" ");
+const getStatusLabel = (itemInfo: any): string | null => {
+  const schema = itemInfo.list.list_metadata.schema;
+  const statusColumn = getColumnByName(schema, COLUMN_NAMES.STATUS);
+  const statusField = getFieldValue(itemInfo, statusColumn.id);
+  const statusOption = statusColumn.options.choices.find(
+    (option: any) => option.value === statusField?.value
+  );
+  return statusOption?.label || null;
+};
+
+/**
+ * Posts a reminder message to a Slack thread (same as post_mr_item_reminder_message)
+ */
+const postReminderToThread = async (
+  client: any,
+  channelId: string,
+  threadId: string,
+  message: string
+): Promise<void> => {
+  const response = await client.apiCall("chat.postMessage", {
+    channel: channelId,
+    thread_ts: threadId,
+    markdown_text: message,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to post message: ${JSON.stringify(response)}`);
+  }
 };
 
 /**
@@ -88,31 +114,8 @@ const getAllListItems = async (
 };
 
 /**
- * Posts a reminder message to a thread for a specific item
- */
-const postReminderMessage = async (
-  client: any,
-  listId: string,
-  itemId: string,
-  threadId: string,
-  pendingReviewers: string[]
-): Promise<boolean> => {
-  const mentions = formatMentions(pendingReviewers);
-  const channelId = listIdToChannelId(listId);
-  const messageText = `This item is ready to review, please review it. cc: ${mentions}`;
-
-  const response = await client.apiCall("chat.postMessage", {
-    channel: channelId,
-    thread_ts: threadId,
-    markdown_text: messageText,
-  });
-
-  return response.ok;
-};
-
-/**
- * Processes a single item and posts a reminder if it has pending reviewers
- * Returns true if reminder was sent successfully, false otherwise
+ * Processes a single item and posts a reminder using the same logic as post_mr_item_reminder_message:
+ * status label, assignee, pending reviewers → getReminderMessage → post to thread if message exists
  */
 const processItemReminder = async (
   client: any,
@@ -120,34 +123,30 @@ const processItemReminder = async (
   item: any
 ): Promise<{ success: boolean; error?: string }> => {
   try {
-    // Get full item info to check for pending reviewers
     const itemInfo = await getItemInfo(client, listId, item.id);
     const pendingReviewers = getPendingReviewers(itemInfo);
+    const assignee = getAssignee(itemInfo);
+    const statusLabel = getStatusLabel(itemInfo);
 
-    // Skip if no pending reviewers
-    if (pendingReviewers.length === 0) {
+    if (!statusLabel) {
       return { success: false };
     }
 
-    // Get thread ID for the item
-    const itemTimestamp = String(itemInfo.record.updated_timestamp);
-    const threadId = await getThreadId(client, listId, item.id, itemTimestamp);
-
-    // Post reminder message
-    const success = await postReminderMessage(
-      client,
-      listId,
-      item.id,
-      threadId,
+    const reminderMessage = getReminderMessage(
+      statusLabel,
+      assignee || "",
       pendingReviewers
     );
 
-    if (!success) {
-      return {
-        success: false,
-        error: `Failed to post reminder for item ${item.id}`,
-      };
+    if (!reminderMessage) {
+      return { success: false };
     }
+
+    const itemTimestamp = String(itemInfo.record.updated_timestamp);
+    const threadId = await getThreadId(client, listId, item.id, itemTimestamp);
+    const channelId = listIdToChannelId(listId);
+
+    await postReminderToThread(client, channelId, threadId, reminderMessage);
 
     return { success: true };
   } catch (error) {

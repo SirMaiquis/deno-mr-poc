@@ -18,5 +18,5 @@ export const STATUS_VALUES = {
   DONE: "DONE",
   PENDING_COMMENTS: "PENDING COMMENTS",
   CLOSED: "CLOSED",
-} as const;
+};
 

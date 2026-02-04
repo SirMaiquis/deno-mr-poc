@@ -20,6 +20,8 @@ export const getReminderMessage = (
   assignee: string,
   reviewers: string[]
 ): string | null => {
+  const statusHasReminder = STATUS_WITH_REMINDERS.includes(status);
+  if (!statusHasReminder) return null;
   const message = REMINDER_MESSAGES[status];
   if (!message) return null;
   

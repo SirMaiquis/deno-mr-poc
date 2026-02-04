@@ -105,6 +105,7 @@ export default SlackFunction(
       }
 
       const reminderMessage = getReminderMessage(statusLabel, assignee || "", pendingReviewers);
+      console.log("reminderMessage", reminderMessage);
       if (!reminderMessage) {
         return { outputs: { success: true } };
       }

@@ -5,6 +5,11 @@
       "enterprise_id": "E0A475X0T3R",
       "team_domain": "mr-auto-poc",
       "team_id": "E0A475X0T3R"
+    },
+    "T1DMCHP33": {
+      "app_id": "A0A7ZDG7SVA",
+      "team_domain": "paciolan",
+      "team_id": "T1DMCHP33"
     }
   },
   "default": "mr-auto-poc"

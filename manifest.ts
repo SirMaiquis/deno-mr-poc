@@ -4,6 +4,8 @@ import { MRListUpdateStatusWorkflow } from "./workflows/mr_list_update_status_wo
 import { MRListItemPostReminderWorkflow } from "./workflows/mr_list_item_post_reminder_workflow.ts";
 import { MRListAddApprovalWorkflow } from "./workflows/mr_list_add_approval_workflow.ts";
 import { MRListBulkPostRemindersWorkflow } from "./workflows/mr_list_bulk_post_reminders_workflow.ts";
+import GitlabMRWebhookReceiveWorkflow from "./workflows/gitlab_mr_webhook_receive_workflow.ts";
+import GitlabMRBulkReminderStartWorkflow from "./workflows/gitlab_mr_bulk_reminder_start.ts";
 
 export default Manifest({
   name: "deno-poc-mr-list",
@@ -16,6 +18,8 @@ export default Manifest({
     MRListItemPostReminderWorkflow,
     MRListAddApprovalWorkflow,
     MRListBulkPostRemindersWorkflow,
+    GitlabMRWebhookReceiveWorkflow,
+    GitlabMRBulkReminderStartWorkflow,
   ],
   outgoingDomains: [],
   botScopes: [
@@ -32,5 +36,6 @@ export default Manifest({
     "mpim:history",
     "im:history",
     "channels:read",
+    "triggers:write"
   ],
 });
