@@ -9,15 +9,52 @@ import {
 } from '../types/index.ts';
 import { PROJECTS_DATA } from '../config/constants.ts';
 import { TriggerTypes } from "deno-slack-api/mod.ts";
+import { ReminderStateDatastore } from '../datastores/reminder_state.ts';
 
 // ============================================================================
-// STATE MANAGEMENT
+// DATASTORE STATE MANAGEMENT
 // ============================================================================
 
-const lastReminderTime = new Map<string, number>();
-/** Project name → timestamp (ms) of last reminder run. Used to enforce "enough time passed" for hourly/daily/specific_times. */
-const lastRunByProject = new Map<string, number>();
-let lastCheckDate: string | null = null;
+/** Shape of a reminder state item stored in the datastore */
+interface ReminderStateItem {
+  id: string;
+  last_reminder_time?: number;
+  last_run_time?: number;
+}
+
+/**
+ * Retrieves the persisted reminder state for a project from the datastore.
+ * Returns null if no state exists yet (first run for this project).
+ */
+async function getReminderState(client: any, projectName: string): Promise<ReminderStateItem | null> {
+  const result = await client.apps.datastore.get({
+    datastore: ReminderStateDatastore.name,
+    id: projectName,
+  });
+
+  if (!result.ok) {
+    // "datastore_error" with item not found is expected on first run
+    console.log(`  Datastore get for "${projectName}": ${result.error}`);
+    return null;
+  }
+
+  return result.item as ReminderStateItem;
+}
+
+/**
+ * Persists the reminder state for a project to the datastore.
+ * Uses put (upsert) so it creates on first call and updates on subsequent calls.
+ */
+async function saveReminderState(client: any, state: ReminderStateItem): Promise<void> {
+  const result = await client.apps.datastore.put({
+    datastore: ReminderStateDatastore.name,
+    item: state,
+  });
+
+  if (!result.ok) {
+    console.error(`  Datastore put for "${state.id}" failed: ${result.error}`);
+  }
+}
 
 // ============================================================================
 // TIME UTILITIES
@@ -131,14 +168,14 @@ function validateBaseConditions(zonedDate: Date, schedule: ReminderScheduleConfi
  * Triggers if enough time has passed since the last reminder
  */
 function shouldTriggerInterval(
-  projectName: string, 
-  schedule: IntervalScheduleConfig
+  schedule: IntervalScheduleConfig,
+  state: ReminderStateItem | null
 ): boolean {
   const now = Date.now();
-  const lastTime = lastReminderTime.get(projectName);
+  const lastTime = state?.last_reminder_time;
   
   if (!lastTime) {
-    console.log(`  Interval: First reminder for ${projectName}`);
+    console.log(`  Interval: First reminder (no previous state found)`);
     return true;
   }
   
@@ -160,9 +197,9 @@ function shouldTriggerInterval(
  * Uses last run time per project: runs only if enough time (intervalHours) has passed since last run.
  */
 function shouldTriggerHourly(
-  projectName: string,
   zonedDate: Date,
-  schedule: HourlyScheduleConfig
+  schedule: HourlyScheduleConfig,
+  state: ReminderStateItem | null
 ): boolean {
   const currentMinute = zonedDate.getMinutes();
   const targetMinute = schedule.minuteOfHour;
@@ -181,7 +218,7 @@ function shouldTriggerHourly(
   }
 
   const now = Date.now();
-  const lastRun = lastRunByProject.get(projectName);
+  const lastRun = state?.last_run_time;
   const intervalMs = intervalHours * 60 * 60 * 1000;
 
   if (lastRun !== undefined && (now - lastRun) < intervalMs) {
@@ -199,9 +236,9 @@ function shouldTriggerHourly(
  * Triggers once per day at the specified time. Uses last run date per project.
  */
 function shouldTriggerDaily(
-  projectName: string,
   zonedDate: Date,
-  schedule: DailyScheduleConfig
+  schedule: DailyScheduleConfig,
+  state: ReminderStateItem | null
 ): boolean {
   const currentMinutes = getMinutesSinceMidnight(zonedDate);
   const targetMinutes = parseTimeToMinutes(schedule.dailyTime);
@@ -213,7 +250,7 @@ function shouldTriggerDaily(
   }
 
   const todayStr = getDateString(zonedDate);
-  const lastRun = lastRunByProject.get(projectName);
+  const lastRun = state?.last_run_time;
   if (lastRun !== undefined) {
     const lastRunZoned = getZonedTime(new Date(lastRun), schedule.timezone);
     if (getDateString(lastRunZoned) === todayStr) {
@@ -231,13 +268,13 @@ function shouldTriggerDaily(
  * Triggers at each specified time once per day. Uses last run per project to avoid duplicate sends for the same slot.
  */
 function shouldTriggerSpecificTimes(
-  projectName: string,
   zonedDate: Date,
-  schedule: SpecificTimesScheduleConfig
+  schedule: SpecificTimesScheduleConfig,
+  state: ReminderStateItem | null
 ): boolean {
   const currentMinutes = getMinutesSinceMidnight(zonedDate);
   const todayStr = getDateString(zonedDate);
-  const lastRun = lastRunByProject.get(projectName);
+  const lastRun = state?.last_run_time;
 
   for (const time of schedule.times) {
     const targetMinutes = parseTimeToMinutes(time);
@@ -270,12 +307,14 @@ function shouldTriggerSpecificTimes(
 // ============================================================================
 
 /**
- * Determines if a reminder should be sent based on the schedule configuration
+ * Determines if a reminder should be sent based on the schedule configuration.
+ * Reads persisted state from the datastore to survive restarts.
+ * @param client - Slack API client (for datastore access)
  * @param projectName - Name of the project (for state tracking)
  * @param schedule - The schedule configuration
  * @returns Whether a reminder should be sent
  */
-export function shouldSendReminder(projectName: string, schedule: ReminderScheduleConfig): boolean {
+export async function shouldSendReminder(client: any, projectName: string, schedule: ReminderScheduleConfig): Promise<boolean> {
   try {
     const now = new Date();
     const zonedDate = getZonedTime(now, schedule.timezone);
@@ -286,19 +325,22 @@ export function shouldSendReminder(projectName: string, schedule: ReminderSchedu
     if (!validateBaseConditions(zonedDate, schedule)) {
       return false;
     }
+
+    // Load persisted state from the datastore
+    const state = await getReminderState(client, projectName);
     
     switch (schedule.type) {
       case 'interval':
-        return shouldTriggerInterval(projectName, schedule);
+        return shouldTriggerInterval(schedule, state);
       
       case 'hourly':
-        return shouldTriggerHourly(projectName, zonedDate, schedule);
+        return shouldTriggerHourly(zonedDate, schedule, state);
       
       case 'daily':
-        return shouldTriggerDaily(projectName, zonedDate, schedule);
+        return shouldTriggerDaily(zonedDate, schedule, state);
       
       case 'specific_times':
-        return shouldTriggerSpecificTimes(projectName, zonedDate, schedule);
+        return shouldTriggerSpecificTimes(zonedDate, schedule, state);
       
       default:
         console.error(`  Unknown schedule type: ${(schedule as any).type}`);
@@ -311,25 +353,29 @@ export function shouldSendReminder(projectName: string, schedule: ReminderSchedu
 }
 
 /**
- * Records that a reminder was sent for tracking purposes (last run time per project).
+ * Records that a reminder was sent by persisting the timestamp to the datastore.
+ * For 'interval' schedules, updates last_reminder_time.
+ * For all other schedules, updates last_run_time.
  */
-function recordReminderSent(projectName: string, schedule: ReminderScheduleConfig): void {
-  if (schedule.type === 'interval') {
-    lastReminderTime.set(projectName, Date.now());
-    return;
-  }
-  lastRunByProject.set(projectName, Date.now());
-}
+async function recordReminderSent(client: any, projectName: string, schedule: ReminderScheduleConfig): Promise<void> {
+  const now = Date.now();
 
-/**
- * Logs when the date changes (last run times are kept per project for "enough time passed" checks).
- */
-function resetDailyTrackingIfNeeded(): void {
-  const today = new Date().toISOString().split('T')[0];
-  if (lastCheckDate !== today) {
-    console.log(`New day detected (${today})`);
-    lastCheckDate = today;
+  // Load existing state so we don't overwrite the other field
+  const existing = await getReminderState(client, projectName);
+
+  const updatedState: ReminderStateItem = {
+    id: projectName,
+    last_reminder_time: existing?.last_reminder_time,
+    last_run_time: existing?.last_run_time,
+  };
+
+  if (schedule.type === 'interval') {
+    updatedState.last_reminder_time = now;
+  } else {
+    updatedState.last_run_time = now;
   }
+
+  await saveReminderState(client, updatedState);
 }
 
 // ============================================================================
@@ -337,14 +383,13 @@ function resetDailyTrackingIfNeeded(): void {
 // ============================================================================
 
 /**
- * Checks all projects and sends reminders if needed
+ * Checks all projects and sends reminders if needed.
+ * Uses the Slack datastore to persist reminder state across runs.
  */
 export async function checkAndSendReminders(slackClient: any): Promise<void> {
   console.log('\n========================================');
   console.log('Checking reminder schedules...');
   console.log('========================================');
-  
-  resetDailyTrackingIfNeeded();
   
   for (const [projectName, projectData] of Object.entries(PROJECTS_DATA)) {
     if (!projectData.reminderSchedule.enabled) {
@@ -354,7 +399,7 @@ export async function checkAndSendReminders(slackClient: any): Promise<void> {
     
     const schedule = projectData.reminderSchedule;
     
-    if (!shouldSendReminder(projectName, schedule)) {
+    if (!await shouldSendReminder(slackClient, projectName, schedule)) {
       console.log(`${projectName}: No reminder needed at this time\n`);
       continue;
     }
@@ -368,7 +413,7 @@ export async function checkAndSendReminders(slackClient: any): Promise<void> {
     
     try {
       await sendBulkReminderToSlack(slackClient, bulkReminderPayload);
-      recordReminderSent(projectName, schedule);
+      await recordReminderSent(slackClient, projectName, schedule);
       console.log(`${projectName}: ✓ Reminder sent successfully\n`);
     } catch (error) {
       console.error(`${projectName}: ✗ Failed to send reminder`, error);
