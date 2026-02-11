@@ -105,8 +105,12 @@ export async function processOpenMergeRequest(payload: GitLabMergeRequestWebhook
     console.error('Assignee email not found for:', payload.assignees?.[0]?.username);
   }
 
-  const reviewersEmails = payload.reviewers?.map(r => USERS_EMAILS[r.username]);
-  const ticketNumber = object_attributes.title.split(':')[0];
+  const reviewersEmails = payload.reviewers?.length
+    ? payload.reviewers.map(r => USERS_EMAILS[r.username])
+    : (projectData.defaultReviewerEmails ?? []).filter(
+        (email) => !assigneeEmail || email !== assigneeEmail
+      );
+  const ticketNumber = object_attributes?.title?.split(':')?.length > 1 ? object_attributes?.title?.split(':')[1] : '';
   const ticketLink = `https://paciolan.atlassian.net/browse/${ticketNumber}`;
 
   const slackPayload: SlackPayload = {

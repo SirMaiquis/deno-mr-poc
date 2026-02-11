@@ -42,6 +42,7 @@ export const USERS_EMAILS: Record<string, string> = {
 
 export const PROJECTS_DATA: Record<string, ProjectData> = {
   "Slack webooks": {
+    enabled: true,
     listId: "F0A40H8F2TC",
     teamId: "T1DMCHP33",
     notificationUserId: "UJT70DFJ6",
@@ -55,10 +56,11 @@ export const PROJECTS_DATA: Record<string, ProjectData> = {
         from: '08:00',
         to: '17:00'
       },
-      minuteOfHour: 6
+      minuteOfHour: 0
     }
   },
   "MauricioMojica-NET-coding-interview": {
+    enabled: false,
     listId: "F0A40H8F2TC",
     teamId: "T1DMCHP33",
     notificationUserId: "UJT70DFJ6",
@@ -72,8 +74,28 @@ export const PROJECTS_DATA: Record<string, ProjectData> = {
         from: '08:00',
         to: '17:00'
       },
-      minuteOfHour: 6
+      minuteOfHour: 0
     }
+  },
+  "usi-module": {
+    enabled: true,
+    listId: "F0A40H8F2TC",
+    teamId: "T1DMCHP33",
+    notificationUserId: "UJT70DFJ6",
+    defaultBranch: "master",
+    reminderSchedule: {
+      enabled: true,
+      type: 'hourly',
+      intervalHours: 4,
+      timezone: 'America/Los_Angeles',
+      activeDays: DayPresets.WEEKDAYS,
+      activeWindow: {
+        from: '08:00',
+        to: '17:00'
+      },
+      minuteOfHour: 0
+    },
+    defaultReviewerEmails: ['mmojica@fullstacklabs.co', 'pford@paciolan.com', 'adodge@paciolan.com', 'aakhribi@paciolan.com']
   }
 };
 

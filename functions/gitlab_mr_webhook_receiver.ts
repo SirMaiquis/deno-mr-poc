@@ -1,8 +1,9 @@
 import { DefineFunction, Schema, SlackFunction } from "deno-slack-sdk/mod.ts";
 import { GitLabMergeRequestWebhookPayload, GitLabNoteWebhookPayload, GitLabWebhookPayload } from "../types/gitlab.types.ts";
-import { processMergeRequestWebhook, processNoteWebhook } from "../sertvices/webhook-router.service.ts";
+import { processMergeRequestWebhook, processNoteWebhook } from "../sertvices/mr-receiver.service.ts";
 import { SlackPayload, UpdateMRStatusPayload } from "../types/slack.types.ts";
 import { TriggerTypes } from "deno-slack-api/mod.ts";
+import { PROJECTS_DATA } from "../config/constants.ts";
 
 export const GitlabMRWebhookReceiverFunction = DefineFunction({
   callback_id: "gitlab_mr_webhook_receiver",
@@ -38,6 +39,15 @@ export default SlackFunction(
       console.log("GitlabMRWebhookReceiverFunction request_body", JSON.stringify(request_body));
 
       try {
+        const projectData = PROJECTS_DATA[request_body.project.name];
+        if (!projectData) {
+          console.error('Project data not found for:', request_body.project.name);
+          return { outputs: { success: false, error: 'Project data not found' } };
+        }
+        if (!projectData.enabled) {
+          console.log(`Project ${request_body.project.name} is not enabled`);
+          return { outputs: { success: true } };
+        }
         const payload = request_body as GitLabWebhookPayload;
         let result: SlackPayload | UpdateMRStatusPayload | null = null;
         

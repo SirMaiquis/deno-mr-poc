@@ -15,7 +15,8 @@ import { TriggerTypes } from "deno-slack-api/mod.ts";
 // ============================================================================
 
 const lastReminderTime = new Map<string, number>();
-const sentTimesToday = new Map<string, Set<string>>();
+/** Project name → timestamp (ms) of last reminder run. Used to enforce "enough time passed" for hourly/daily/specific_times. */
+const lastRunByProject = new Map<string, number>();
 let lastCheckDate: string | null = null;
 
 // ============================================================================
@@ -155,94 +156,110 @@ function shouldTriggerInterval(
 
 /**
  * Checks if an HOURLY schedule should trigger
- * Triggers at the specified minute of each hour
+ * Triggers at the specified minute of each hour, respecting intervalHours.
+ * Uses last run time per project: runs only if enough time (intervalHours) has passed since last run.
  */
 function shouldTriggerHourly(
   projectName: string,
-  zonedDate: Date, 
+  zonedDate: Date,
   schedule: HourlyScheduleConfig
 ): boolean {
   const currentMinute = zonedDate.getMinutes();
   const targetMinute = schedule.minuteOfHour;
-  
+  const currentHour = zonedDate.getHours();
+  const intervalHours = schedule.intervalHours ?? 1;
+
   if (currentMinute !== targetMinute) {
     console.log(`  Hourly: Current minute ${currentMinute} ≠ target minute ${targetMinute}`);
     return false;
   }
-  
-  const hourKey = `${projectName}:hourly:${zonedDate.getHours()}`;
-  const dateStr = getDateString(zonedDate);
-  const sentTimes = sentTimesToday.get(dateStr) || new Set();
-  
-  if (sentTimes.has(hourKey)) {
-    console.log(`  Hourly: Already sent for hour ${zonedDate.getHours()}`);
+
+  // Only at interval boundaries (e.g. intervalHours 2 → 0:xx, 2:xx, 4:xx)
+  if (currentHour % intervalHours !== 0) {
+    console.log(`  Hourly: Hour ${currentHour} is not on interval boundary (every ${intervalHours}h)`);
     return false;
   }
-  
-  console.log(`  Hourly: Triggering at :${String(targetMinute).padStart(2, '0')}`);
+
+  const now = Date.now();
+  const lastRun = lastRunByProject.get(projectName);
+  const intervalMs = intervalHours * 60 * 60 * 1000;
+
+  if (lastRun !== undefined && (now - lastRun) < intervalMs) {
+    const minutesSince = (now - lastRun) / 1000 / 60;
+    console.log(`  Hourly: Last run ${minutesSince.toFixed(0)} min ago, need ${intervalHours}h`);
+    return false;
+  }
+
+  console.log(`  Hourly: Triggering at ${currentHour}:${String(targetMinute).padStart(2, '0')} (interval ${intervalHours}h)`);
   return true;
 }
 
 /**
  * Checks if a DAILY schedule should trigger
- * Triggers once per day at the specified time
+ * Triggers once per day at the specified time. Uses last run date per project.
  */
 function shouldTriggerDaily(
   projectName: string,
-  zonedDate: Date, 
+  zonedDate: Date,
   schedule: DailyScheduleConfig
 ): boolean {
   const currentMinutes = getMinutesSinceMidnight(zonedDate);
   const targetMinutes = parseTimeToMinutes(schedule.dailyTime);
-  
+
   if (Math.abs(currentMinutes - targetMinutes) > 0) {
     const currentTime = formatTime(zonedDate);
     console.log(`  Daily: Current time ${currentTime} ≠ target time ${schedule.dailyTime}`);
     return false;
   }
-  
-  const dateStr = getDateString(zonedDate);
-  const dailyKey = `${projectName}:daily`;
-  const sentTimes = sentTimesToday.get(dateStr) || new Set();
-  
-  if (sentTimes.has(dailyKey)) {
-    console.log(`  Daily: Already sent today`);
-    return false;
+
+  const todayStr = getDateString(zonedDate);
+  const lastRun = lastRunByProject.get(projectName);
+  if (lastRun !== undefined) {
+    const lastRunZoned = getZonedTime(new Date(lastRun), schedule.timezone);
+    if (getDateString(lastRunZoned) === todayStr) {
+      console.log(`  Daily: Already sent today`);
+      return false;
+    }
   }
-  
+
   console.log(`  Daily: Triggering at ${schedule.dailyTime}`);
   return true;
 }
 
 /**
  * Checks if a SPECIFIC_TIMES schedule should trigger
- * Triggers at each specified time once per day
+ * Triggers at each specified time once per day. Uses last run per project to avoid duplicate sends for the same slot.
  */
 function shouldTriggerSpecificTimes(
   projectName: string,
-  zonedDate: Date, 
+  zonedDate: Date,
   schedule: SpecificTimesScheduleConfig
 ): boolean {
   const currentMinutes = getMinutesSinceMidnight(zonedDate);
-  const dateStr = getDateString(zonedDate);
-  const sentTimes = sentTimesToday.get(dateStr) || new Set();
-  
+  const todayStr = getDateString(zonedDate);
+  const lastRun = lastRunByProject.get(projectName);
+
   for (const time of schedule.times) {
     const targetMinutes = parseTimeToMinutes(time);
-    
+
     if (Math.abs(currentMinutes - targetMinutes) <= 0) {
-      const timeKey = `${projectName}:specific:${time}`;
-      
-      if (sentTimes.has(timeKey)) {
-        console.log(`  Specific: Already sent for ${time} today`);
-        continue;
+      if (lastRun !== undefined) {
+        const lastRunZoned = getZonedTime(new Date(lastRun), schedule.timezone);
+        const sameDay = getDateString(lastRunZoned) === todayStr;
+        const sameSlot =
+          lastRunZoned.getHours() === zonedDate.getHours() &&
+          lastRunZoned.getMinutes() === zonedDate.getMinutes();
+        if (sameDay && sameSlot) {
+          console.log(`  Specific: Already sent for ${time} today`);
+          continue;
+        }
       }
-      
+
       console.log(`  Specific: Triggering at ${time}`);
       return true;
     }
   }
-  
+
   const currentTime = formatTime(zonedDate);
   console.log(`  Specific: Current time ${currentTime} doesn't match any of [${schedule.times.join(', ')}]`);
   return false;
@@ -294,57 +311,23 @@ export function shouldSendReminder(projectName: string, schedule: ReminderSchedu
 }
 
 /**
- * Records that a reminder was sent for tracking purposes
+ * Records that a reminder was sent for tracking purposes (last run time per project).
  */
 function recordReminderSent(projectName: string, schedule: ReminderScheduleConfig): void {
-  const now = new Date();
-  const zonedDate = getZonedTime(now, schedule.timezone);
-  const dateStr = getDateString(zonedDate);
-  
   if (schedule.type === 'interval') {
     lastReminderTime.set(projectName, Date.now());
     return;
   }
-  
-  let sentTimes = sentTimesToday.get(dateStr);
-  if (!sentTimes) {
-    sentTimes = new Set();
-    sentTimesToday.set(dateStr, sentTimes);
-  }
-  
-  switch (schedule.type) {
-    case 'hourly':
-      sentTimes.add(`${projectName}:hourly:${zonedDate.getHours()}`);
-      break;
-    
-    case 'daily':
-      sentTimes.add(`${projectName}:daily`);
-      break;
-    
-    case 'specific_times': {
-      const currentTime = formatTime(zonedDate);
-      for (const time of schedule.times) {
-        const currentMinutes = getMinutesSinceMidnight(zonedDate);
-        const targetMinutes = parseTimeToMinutes(time);
-        if (Math.abs(currentMinutes - targetMinutes) <= 0) {
-          sentTimes.add(`${projectName}:specific:${time}`);
-          break;
-        }
-      }
-      break;
-    }
-  }
+  lastRunByProject.set(projectName, Date.now());
 }
 
 /**
- * Resets daily tracking when the date changes
+ * Logs when the date changes (last run times are kept per project for "enough time passed" checks).
  */
 function resetDailyTrackingIfNeeded(): void {
   const today = new Date().toISOString().split('T')[0];
-  
   if (lastCheckDate !== today) {
-    console.log(`New day detected (${today}), resetting daily tracking`);
-    sentTimesToday.clear();
+    console.log(`New day detected (${today})`);
     lastCheckDate = today;
   }
 }

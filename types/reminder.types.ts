@@ -190,6 +190,14 @@ export interface HourlyScheduleConfig extends BaseScheduleConfig {
    * @example 15 for quarter past (9:15, 10:15, 11:15...)
    */
   minuteOfHour: number;
+   
+  /**
+   * Number of hours between reminders
+   * @example 1 for every hour
+   * @example 2 for every 2 hours
+   * @example 3 for every 3 hours
+   */
+  intervalHours?: number;
 }
 
 /**
@@ -280,6 +288,9 @@ export type ReminderScheduleConfig =
  * Project data configuration including reminder schedule
  */
 export interface ProjectData {
+  /** Whether the project is enabled */
+  enabled: boolean;
+  
   /** Slack list ID for the project */
   listId: string;
   
@@ -294,6 +305,9 @@ export interface ProjectData {
   
   /** Reminder schedule configuration */
   reminderSchedule: ReminderScheduleConfig;
+
+  //** Default reviewer emails */
+  defaultReviewerEmails?: string[];
 }
 
 /**
